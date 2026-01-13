@@ -5,12 +5,19 @@ import type {Receive} from './Store';
 import {of, from, pipe} from 'rxjs';
 import type {Observable, OperatorFunction} from 'rxjs';
 
-import {bufferCount, bufferTime, catchError, concatMap, mergeMap, map} from 'rxjs/operators';
+import {bufferCount, bufferTime, catchError, mergeMap, map} from 'rxjs/operators';
+
+const DEFAULT_MAX_CONCURRENCY = 10;
 
 interface Options<A,D,E,R> {
     request: (argsArray: A[]) => Observable<Array<R>>|Promise<Array<R>>;
     bufferTime: number;
     batch: number;
+    /**
+     * Maximum number of batches to process concurrently.
+     * Defaults to 10. Set to 1 for sequential processing (previous behavior).
+     */
+    maxConcurrency?: number;
     getArgs: GetArgs<A,R>;
     getData: GetArgs<D,R>;
     requestError: (error: unknown, argsArray: A[]) => E;
@@ -22,6 +29,7 @@ export const rxBatch = <A,D,E,R>(options: Options<A,D,E,R>): OperatorFunction<A,
         request,
         bufferTime: time,
         batch,
+        maxConcurrency = DEFAULT_MAX_CONCURRENCY,
         getArgs,
         getData,
         requestError,
@@ -33,14 +41,14 @@ export const rxBatch = <A,D,E,R>(options: Options<A,D,E,R>): OperatorFunction<A,
         mergeMap((argsArray: A[]) => from(argsArray).pipe(
             bufferCount(batch)
         )),
-        concatMap((argsArray: A[]) => of(argsArray).pipe(
+        mergeMap((argsArray: A[]) => of(argsArray).pipe(
             mergeMap(request),
             map((resultArray: R[]) => sortByArgsArray(argsArray, resultArray, getArgs, getData, missingError)),
             catchError((err: unknown) => {
                 const error = requestError(err, argsArray);
                 return of(argsArray.map(args => ({args, error})));
             })
-        )),
+        ), maxConcurrency),
         mergeMap((items: Array<Receive<A,D,E>>) => from(items))
     );
 };
